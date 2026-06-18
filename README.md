@@ -118,3 +118,7 @@ To run the notebook locally, configure your Python environment using the instruc
    ```bash
    git clone [https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git](https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git)
    cd YOUR_REPOSITORY
+
+jupyter notebook
+
+pip install pandas numpy matplotlib seaborn statsmodels scipy jupyter
