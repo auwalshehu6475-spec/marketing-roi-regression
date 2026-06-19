@@ -2,64 +2,94 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
 
 sns.set_theme(style="whitegrid")
 plt.rcParams['figure.figsize'] = (12, 8)
 
-# ==========================================
-# 1. DATA EXPLORATION
-# ==========================================
+# ==========================================================
+# 1. LOAD DATA
+# ==========================================================
 df = pd.read_csv("0f484464-3cc8-4bfc-968b-b1a9fc4d4b1d.csv")
 
-# Drop noise columns
-columns_to_drop = [col for col in ['Unnamed: 0', 'name'] if col in df.columns]
-df_cleaned = df.drop(columns=columns_to_drop)
+drop_cols = [c for c in ['Unnamed: 0', 'name'] if c in df.columns]
+df_cleaned = df.drop(columns=drop_cols)
 
-# Class distribution plot
+# ==========================================================
+# 2. TARGET DISTRIBUTION
+# ==========================================================
 plt.figure(figsize=(6, 4))
 sns.countplot(data=df_cleaned, x='target_5yrs', palette='viridis')
-plt.title('Distribution of Target Class (>= 5 Years Career)')
-plt.xlabel('Target (0 = <5 yrs, 1 = >=5 yrs)')
-plt.ylabel('Count')
+plt.title("Target Distribution")
 plt.show()
 
-# Class balance print
-class_counts = df_cleaned['target_5yrs'].value_counts()
-print("--- Target Class Distribution ---")
-print(class_counts)
+print(df_cleaned['target_5yrs'].value_counts())
 
-# ==========================================
-# 2. FEATURE ENGINEERING
-# ==========================================
+# ==========================================================
+# 3. MISSING VALUES
+# ==========================================================
+print("\nMissing values:")
+print(df_cleaned.isnull().sum()[df_cleaned.isnull().sum() > 0])
 
-# Safe division
+# ==========================================================
+# 4. FEATURE ENGINEERING (SAFE)
+# ==========================================================
 if 'min' in df_cleaned.columns:
     df_cleaned['min'] = df_cleaned['min'].replace(0, np.nan)
 
-if 'pts' in df_cleaned.columns and 'min' in df_cleaned.columns:
+if 'pts' in df_cleaned.columns:
     df_cleaned['pts_per_min'] = df_cleaned['pts'] / df_cleaned['min']
-    df_cleaned['pts_per_min'] = df_cleaned['pts_per_min'].replace([np.inf, -np.inf], np.nan).fillna(0)
 
-# Efficiency rating (only if columns exist)
-cols = ['pts', 'reb', 'ast', 'stl', 'blk', 'tov']
-if all(c in df_cleaned.columns for c in cols):
-    df_cleaned['efficiency_rating'] = (
-        df_cleaned['pts'] +
-        df_cleaned['reb'] +
-        df_cleaned['ast'] +
-        df_cleaned['stl'] +
-        df_cleaned['blk']
-    ) - df_cleaned['tov']
+df_cleaned['efficiency_rating'] = (
+    df_cleaned[['pts','reb','ast','stl','blk']].sum(axis=1)
+    - df_cleaned['tov']
+)
 
-# ==========================================
-# 3. CORRELATION ANALYSIS (FIXED)
-# ==========================================
+df_cleaned.replace([np.inf, -np.inf], np.nan, inplace=True)
+df_cleaned['pts_per_min'] = df_cleaned['pts_per_min'].fillna(0)
 
+# ==========================================================
+# 5. CORRELATION (FIXED)
+# ==========================================================
 features_only = df_cleaned.drop(columns=['target_5yrs'])
+corr_matrix = features_only.select_dtypes(include=[np.number]).corr()
 
-corr = features_only.select_dtypes(include=[np.number]).corr()
-
-plt.figure(figsize=(10, 6))
-sns.heatmap(corr, cmap="coolwarm", center=0)
-plt.title("Feature Correlation Matrix")
+plt.figure(figsize=(12, 8))
+sns.heatmap(corr_matrix, cmap="coolwarm", square=True)
+plt.title("Correlation Matrix")
 plt.show()
+
+upper_tri = corr_matrix.where(
+    np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+)
+
+redundant_features = [
+    col for col in upper_tri.columns
+    if any(upper_tri[col] > 0.90)
+]
+
+print("\nHighly correlated features:", redundant_features)
+
+df_reduced = df_cleaned.drop(columns=redundant_features)
+
+# ==========================================================
+# 6. FEATURE MATRIX (NO LEAKAGE FIX)
+# ==========================================================
+X = df_reduced.drop(columns=['target_5yrs'])
+y = df_reduced['target_5yrs']
+
+# numeric-only safety
+X = X.select_dtypes(include=[np.number])
+
+# Imputer + scaler (OK for now, but ideally inside pipeline later)
+imputer = SimpleImputer(strategy='median')
+X_imputed = imputer.fit_transform(X)
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_imputed)
+
+X_final = pd.DataFrame(X_scaled, columns=X.columns)
+
+print("\nFinal shape:", X_final.shape)
+print(X_final.head())
