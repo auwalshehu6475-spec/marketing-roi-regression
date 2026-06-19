@@ -1,68 +1,62 @@
-# -*- coding: utf-8 -*-
-"""
-K-Nearest Neighbor (KNN) Classification Project
-Dataset: Iris Dataset (scikit-learn)
-
-Project Workflow:
-1. Import libraries
-2. Load and explore data
-3. Perform preprocessing
-4. Split data
-5. Scale features
-6. Hyperparameter tuning
-7. Train final model
-8. Evaluate performance
-9. Interpret results
-10. Predict new samples
-"""
-
-# ==============================================================================
-# 1. IMPORT LIBRARIES
-# ==============================================================================
-
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from sklearn.datasets import load_iris
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
 
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    confusion_matrix,
-    classification_report
+# Load data
+df = pd.read_csv("data.csv")
+
+# Clean column names
+df.columns = df.columns.str.strip()
+
+# Drop unnecessary columns
+df_cleaned = df.drop(columns=['id', 'Unnamed: 32'], errors='ignore')
+
+# Normalize target
+df_cleaned['diagnosis'] = df_cleaned['diagnosis'].astype(str).str.strip().str.upper()
+df_cleaned['diagnosis'] = df_cleaned['diagnosis'].map({'M': 1, 'B': 0})
+
+# Remove rows where target became NaN
+df_cleaned = df_cleaned.dropna(subset=['diagnosis'])
+
+# Features and target
+X = df_cleaned.drop(columns=['diagnosis'])
+X = X.select_dtypes(include=[np.number])  # keep numeric only
+y = df_cleaned['diagnosis']
+
+# Split
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
 )
 
-# Plot settings
-sns.set_style("whitegrid")
-plt.rcParams["figure.figsize"] = (10, 6)
+# Scale
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
 
-# ==============================================================================
-# 2. DATA LOADING
-# ==============================================================================
+# Model
+log_reg = LogisticRegression(max_iter=2000, solver='liblinear')
+log_reg.fit(X_train_scaled, y_train)
 
-print("=" * 60)
-print("DATA LOADING")
-print("=" * 60)
+# Predictions
+y_pred = log_reg.predict(X_test_scaled)
 
-iris = load_iris()
+# Metrics
+print("--- Model Performance ---")
+print("Accuracy:", accuracy_score(y_test, y_pred))
+print("Precision:", precision_score(y_test, y_pred, zero_division=0))
+print("Recall:", recall_score(y_test, y_pred, zero_division=0))
+print("F1:", f1_score(y_test, y_pred, zero_division=0))
 
-X = iris.data
-y = iris.target
+# Confusion matrix
+cm = confusion_matrix(y_test, y_pred)
 
-feature_names = iris.feature_names
-target_names = iris.target_names
-
-# Create DataFrame
-df = pd.DataFrame(X, columns=feature_names)
-df["species"] = pd.Categorical.from_codes(y, target_names)
-
-print(f"Dataset Shape: {df.shape}")
-
-print("\nFirst 5 rows")
+plt.figure(figsize=(6,5))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Reds')
+plt.title("Confusion Matrix")
+plt.show()
