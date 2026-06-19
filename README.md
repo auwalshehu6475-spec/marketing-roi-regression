@@ -1,173 +1,211 @@
-# ==========================================
-# Multiple Linear Regression Marketing Analysis
-# ==========================================
-
-# 1. Import Libraries
 import pandas as pd
 import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
-import statsmodels.api as sm
-from statsmodels.stats.outliers_influence import variance_inflation_factor
+import seaborn as sns
 
-# ==========================================
-# 2. Load and Clean Dataset
-# ==========================================
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    confusion_matrix,
+    classification_report,
+    accuracy_score,
+    precision_score,
+    recall_score
+)
 
-df = pd.read_csv("c107fa55-45be-4f9c-8f61-088e88d1fb0c.csv")
+# =====================================================
+# 1. Load Dataset
+# =====================================================
 
-# Clean column names (strip whitespace and replace spaces)
-df.columns = df.columns.str.strip().str.replace(' ', '_')
+df = pd.read_csv("617ec7a0-b7f1-423e-b810-23f59803ffb6.csv")
 
-# Remove missing values
-df_clean = df.dropna()
+# =====================================================
+# 2. Clean Column Names
+# =====================================================
 
-print(f"Dataset Shape: {df_clean.shape}")
-print(f"\nColumns: {list(df_clean.columns)}")
-print("\nFirst 5 Rows:")
-print(df_clean.head())
+df.columns = df.columns.str.strip()
 
-# ==========================================
-# 3. Exploratory Data Analysis & Correlation
-# ==========================================
+# =====================================================
+# 3. Remove Unnecessary ID Columns (if present)
+# =====================================================
 
-print("\nSummary Statistics:")
-print(df_clean.describe())
+for col in ['Unnamed: 0', 'id']:
+    if col in df.columns:
+        df.drop(columns=col, inplace=True)
 
-plt.figure(figsize=(8, 6))
-# Filter numeric columns for correlation matrix
-numeric_cols = ['TV', 'Radio', 'Social_Media', 'Sales']
+# =====================================================
+# 4. Inspect Dataset
+# =====================================================
+
+print("Dataset Information:")
+print(df.info())
+
+print("\nMissing Values:")
+print(df.isnull().sum())
+
+print("\nOriginal Satisfaction Distribution:")
+print(df['satisfaction'].value_counts())
+
+# =====================================================
+# 5. Handle Missing Values
+# =====================================================
+
+numeric_cols = df.select_dtypes(include=np.number).columns
+
+for col in numeric_cols:
+    df[col] = df[col].fillna(df[col].median())
+
+# =====================================================
+# 6. Encode Target Variable
+# =====================================================
+
+df['satisfaction'] = (
+    df['satisfaction']
+    .astype(str)
+    .str.strip()
+    .str.lower()
+    .map({
+        'satisfied': 1,
+        'neutral or dissatisfied': 0
+    })
+)
+
+# Remove rows with unmapped values if any
+df = df.dropna(subset=['satisfaction'])
+
+df['satisfaction'] = df['satisfaction'].astype(int)
+
+print("\nEncoded Satisfaction Distribution:")
+print(df['satisfaction'].value_counts(normalize=True))
+
+# =====================================================
+# 7. Encode Categorical Variables
+# =====================================================
+
+categorical_cols = ['Customer Type', 'Type of Travel', 'Class']
+
+df_encoded = pd.get_dummies(
+    df,
+    columns=categorical_cols,
+    drop_first=True
+)
+
+# =====================================================
+# 8. Separate Features and Target
+# =====================================================
+
+X = df_encoded.drop(columns='satisfaction')
+y = df_encoded['satisfaction']
+
+# Ensure all columns are numeric
+X = X.astype(float)
+
+# Save feature names
+feature_names = X.columns
+
+# =====================================================
+# 9. Train-Test Split
+# =====================================================
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.20,
+    random_state=42,
+    stratify=y
+)
+
+# =====================================================
+# 10. Scale Features
+# =====================================================
+
+scaler = StandardScaler()
+
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# =====================================================
+# 11. Build Logistic Regression Model
+# =====================================================
+
+log_reg = LogisticRegression(
+    max_iter=3000,
+    random_state=42,
+    solver='lbfgs'
+)
+
+log_reg.fit(X_train_scaled, y_train)
+
+# =====================================================
+# 12. Make Predictions
+# =====================================================
+
+y_pred = log_reg.predict(X_test_scaled)
+y_pred_proba = log_reg.predict_proba(X_test_scaled)[:, 1]
+
+# =====================================================
+# 13. Evaluate Model
+# =====================================================
+
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+
+print("\n--- Model Performance Metrics ---")
+
+print(f"Accuracy : {accuracy:.4f}")
+
+print(f"Precision: {precision:.4f}")
+
+print(f"Recall   : {recall:.4f}")
+
+print("\nClassification Report:")
+
+print(classification_report(y_test, y_pred))
+
+# =====================================================
+# 14. Confusion Matrix
+# =====================================================
+
+cm = confusion_matrix(y_test, y_pred)
+
+plt.figure(figsize=(6,4))
+
 sns.heatmap(
-    df_clean[numeric_cols].corr(),
+    cm,
     annot=True,
-    cmap='coolwarm',
-    fmt=".2f"
+    fmt='d',
+    cmap='Blues',
+    xticklabels=['Dissatisfied/Neutral', 'Satisfied'],
+    yticklabels=['Dissatisfied/Neutral', 'Satisfied']
 )
-plt.title('Correlation Matrix')
+
+plt.title('Confusion Matrix')
+
+plt.xlabel('Predicted')
+
+plt.ylabel('Actual')
+
 plt.show()
 
-# ==========================================
-# 4. Multicollinearity Check (VIF)
-# ==========================================
+# =====================================================
+# 15. Feature Importance (Coefficients)
+# =====================================================
 
-# Select the required independent variables as continuous features
-features = ['TV', 'Radio', 'Social_Media']
-X_vif = df_clean[features]
+coefficients = log_reg.coef_[0]
 
-# Add constant for VIF calculation and cast to float for stability
-X_vif_const = sm.add_constant(X_vif).astype(float)
+coef_df = pd.DataFrame({
+    'Feature': feature_names,
+    'Coefficient': coefficients,
+    'Odds Ratio': np.exp(coefficients)
+})
 
-vif = pd.DataFrame()
-vif["Feature"] = X_vif_const.columns
-vif["VIF"] = [
-    variance_inflation_factor(X_vif_const.values, i)
-    for i in range(X_vif_const.shape[1])
-]
-
-print("\n========== VIF RESULTS ==========")
-print(vif.round(4))
-print("\nInterpretation:\nVIF < 5 = acceptable\nVIF > 5 = moderate multicollinearity\nVIF > 10 = severe multicollinearity")
-
-# ==========================================
-# 5. Build Multiple Linear Regression Model
-# ==========================================
-
-# Define features (X) and target variable (y)
-X = df_clean[features]
-y = df_clean['Sales']
-
-# Add an intercept term (OBLIGATORY for statsmodels OLS)
-X = sm.add_constant(X)
-
-# Fit the Multiple Linear Regression model
-mlr_model = sm.OLS(y, X).fit()
-
-print("\n========== MLR SUMMARY ==========")
-print(mlr_model.summary())
-
-# ==========================================
-# 6. Adjusted R-Squared & F-Statistic Evaluation
-# ==========================================
-
-r2 = mlr_model.rsquared
-adj_r2 = mlr_model.rsquared_adj
-f_stat = mlr_model.fvalue
-f_pval = mlr_model.f_pvalue
-
-print("\n========== MODEL PERFORMANCE ==========")
-print(f"R-squared: {r2:.4f}")
-print(f"Adjusted R-squared: {adj_r2:.4f}")
-print(f"F-statistic: {f_stat:.4f} (p-value: {f_pval:.4e})")
-print(f"\nInterpretation: The model explains {adj_r2*100:.2f}% of the variation in Sales after accounting for multiple predictors.")
-
-# ==========================================
-# 7. Assumption Checks (Residual Diagnostics)
-# ==========================================
-
-residuals = mlr_model.resid
-fitted = mlr_model.fittedvalues
-
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-# Residual plot (Homoscedasticity & Linearity Check)
-sns.scatterplot(x=fitted, y=residuals, alpha=0.6, ax=axes[0])
-axes[0].axhline(y=0, color='red', linestyle='--')
-axes[0].set_title('Residuals vs Fitted')
-axes[0].set_xlabel('Predicted Sales')
-axes[0].set_ylabel('Residuals')
-
-# Q-Q Plot (Normality Check - scaled correctly)
-sm.qqplot(residuals, line='s', ax=axes[1])
-axes[1].set_title('Q-Q Plot')
-
-plt.tight_layout()
-plt.show()
-
-# ==========================================
-# 8. Final Regression Equation
-# ==========================================
-
-intercept = mlr_model.params['const']
-b_tv = mlr_model.params['TV']
-b_radio = mlr_model.params['Radio']
-b_social = mlr_model.params['Social_Media']
-
-print("\n========== FINAL EQUATION ==========")
-equation = (
-    f"Sales = {intercept:.4f} "
-    f"+ ({b_tv:.4f} × TV) "
-    f"+ ({b_radio:.4f} × Radio) "
-    f"+ ({b_social:.4f} × Social_Media)"
+coef_df = coef_df.sort_values(
+    by='Coefficient',
+    ascending=False
 )
-print(equation)
 
-# ==========================================
-# 9. Coefficient & Partial Effect Interpretation
-# ==========================================
+print("\n--- Top Drivers of Customer Satisfaction ---")
 
-print("\n========== BUSINESS INTERPRETATION ==========")
-for col in features:
-    coef = mlr_model.params[col]
-    p_val = mlr_model.pvalues[col]
-    sig_text = "is statistically significant" if p_val < 0.05 else "is NOT statistically significant"
-    
-    print(
-        f"Holding all other variables constant, a 1-unit increase in {col} investment "
-        f"is associated with a {coef:.4f} unit change in Sales ({sig_text}, p-value = {p_val:.4f})."
-    )
-
-# ==========================================
-# 10. Business Recommendation
-# ==========================================
-
-print("\n========== FINAL RECOMMENDATION ==========")
-print(
-"""
-1. Allocate marketing budget to channels prioritizing those with the highest, 
-   statistically significant positive partial coefficients (p < 0.05).
-2. Look at the final MLR summary: If a channel's p-value is greater than 0.05, 
-   consider reducing budget there as it does not have a reliable relationship with Sales.
-3. Use Adjusted R² instead of regular R² because it penalizes adding variables 
-   that do not improve model quality, giving us a true picture of model performance.
-"""
-)
+print(coef_df)
