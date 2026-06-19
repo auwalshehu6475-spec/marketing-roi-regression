@@ -1,124 +1,173 @@
-# Import required libraries
+# ==========================================
+# Multiple Linear Regression Marketing Analysis
+# ==========================================
+
+# 1. Import Libraries
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.pyplot as plt
 import statsmodels.api as sm
-from scipy import stats
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
-# Set visualization styles
-sns.set_theme(style='whitegrid')
-plt.rcParams['figure.figsize'] = (12, 6)
+# ==========================================
+# 2. Load and Clean Dataset
+# ==========================================
 
-# ## 1. Load and Clean Dataset
-# Def file = '85334965-5736-457a-b8d4-a077e6872f84.csv'
+df = pd.read_csv("c107fa55-45be-4f9c-8f61-088e88d1fb0c.csv")
 
-# Load data
-df = pd.read_csv(file)
+# Clean column names (strip whitespace and replace spaces)
+df.columns = df.columns.str.strip().str.replace(' ', '_')
 
-# Display initial metadata
-print("--- Initial Dataset Summary ---")
-print(df.info())
-print("\n--- Missing Values Count ---")
-print(df.isnull().sum())
+# Remove missing values
+df_clean = df.dropna()
 
-# Drop missing values to ensure clean modeling
-df_clean = df.dropna().copy()
-print(f"\nShape after dropping missing values: {df_clean.shape}")
+print(f"Dataset Shape: {df_clean.shape}")
+print(f"\nColumns: {list(df_clean.columns)}")
+print("\nFirst 5 Rows:")
+print(df_clean.head())
 
-# ## 2. Exploratory Data Analysis (EDA) & Variable Selection
+# ==========================================
+# 3. Exploratory Data Analysis & Correlation
+# ==========================================
 
-# Calculate correlation matrix
-corr_matrix = df_clean.corr()
-print("--- Correlation Matrix ---")
-print(corr_matrix)
+print("\nSummary Statistics:")
+print(df_clean.describe())
 
-# Visualize relationships with sales
-fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+plt.figure(figsize=(8, 6))
+# Filter numeric columns for correlation matrix
+numeric_cols = ['TV', 'Radio', 'Social_Media', 'Sales']
+sns.heatmap(
+    df_clean[numeric_cols].corr(),
+    annot=True,
+    cmap='coolwarm',
+    fmt=".2f"
+)
+plt.title('Correlation Matrix')
+plt.show()
 
-sns.regplot(data=df_clean, x='TV', y='Sales', ax=axes[0], scatter_kws={'alpha':0.3}, line_kws={'color':'red'})
-axes[0].set_title(f"TV vs Sales (r = {corr_matrix.loc['TV', 'Sales']:.4f})")
+# ==========================================
+# 4. Multicollinearity Check (VIF)
+# ==========================================
 
-sns.regplot(data=df_clean, x='Radio', y='Sales', ax=axes[1], scatter_kws={'alpha':0.3}, line_kws={'color':'red'})
-axes[1].set_title(f"Radio vs Sales (r = {corr_matrix.loc['Radio', 'Sales']:.4f})")
+# Select the required independent variables as continuous features
+features = ['TV', 'Radio', 'Social_Media']
+X_vif = df_clean[features]
 
-sns.regplot(data=df_clean, x='Social_Media', y='Sales', ax=axes[2], scatter_kws={'alpha':0.3}, line_kws={'color':'red'})
-axes[2].set_title(f"Social Media vs Sales (r = {corr_matrix.loc['Social_Media', 'Sales']:.4f})")
+# Add constant for VIF calculation and cast to float for stability
+X_vif_const = sm.add_constant(X_vif).astype(float)
 
-plt.tight_layout()
-plt.savefig('eda_plots.png')
-print("\n[INFO] EDA plots saved successfully as 'eda_plots.png'")
+vif = pd.DataFrame()
+vif["Feature"] = X_vif_const.columns
+vif["VIF"] = [
+    variance_inflation_factor(X_vif_const.values, i)
+    for i in range(X_vif_const.shape[1])
+]
 
-# **Analytical Justification:** Based on the correlation matrix, **TV** has a near-perfect linear relationship with Sales ($r = 0.9995$), outperforming Radio ($0.8686$) and Social Media ($0.5274$). Therefore, TV is selected as our independent variable.
+print("\n========== VIF RESULTS ==========")
+print(vif.round(4))
+print("\nInterpretation:\nVIF < 5 = acceptable\nVIF > 5 = moderate multicollinearity\nVIF > 10 = severe multicollinearity")
 
-# ## 3. Build the OLS Regression Model
+# ==========================================
+# 5. Build Multiple Linear Regression Model
+# ==========================================
 
-# Define variables
-X = df_clean['TV']
+# Define features (X) and target variable (y)
+X = df_clean[features]
 y = df_clean['Sales']
 
-# Add constant to independent variable for intercept calculation
-X_with_constant = sm.add_constant(X)
+# Add an intercept term (OBLIGATORY for statsmodels OLS)
+X = sm.add_constant(X)
 
-# Fit OLS Model
-model = sm.OLS(y, X_with_constant).fit()
+# Fit the Multiple Linear Regression model
+mlr_model = sm.OLS(y, X).fit()
 
-# Display results
-print(model.summary())
+print("\n========== MLR SUMMARY ==========")
+print(mlr_model.summary())
 
-# ## 4. Regression Diagnostic Plots
+# ==========================================
+# 6. Adjusted R-Squared & F-Statistic Evaluation
+# ==========================================
 
-# Extract residuals and fitted values
-residuals = model.resid
-fitted_values = model.fittedvalues
+r2 = mlr_model.rsquared
+adj_r2 = mlr_model.rsquared_adj
+f_stat = mlr_model.fvalue
+f_pval = mlr_model.f_pvalue
 
-# Create diagnostics grid
-fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+print("\n========== MODEL PERFORMANCE ==========")
+print(f"R-squared: {r2:.4f}")
+print(f"Adjusted R-squared: {adj_r2:.4f}")
+print(f"F-statistic: {f_stat:.4f} (p-value: {f_pval:.4e})")
+print(f"\nInterpretation: The model explains {adj_r2*100:.2f}% of the variation in Sales after accounting for multiple predictors.")
 
-# 1. Linearity & Homoscedasticity Check
-sns.scatterplot(x=fitted_values, y=residuals, ax=axes[0], alpha=0.3)
-axes[0].axhline(y=0, color='r', linestyle='--')
-axes[0].set_title('Residuals vs Fitted (Homoscedasticity)')
-axes[0].set_xlabel('Fitted Values')
+# ==========================================
+# 7. Assumption Checks (Residual Diagnostics)
+# ==========================================
+
+residuals = mlr_model.resid
+fitted = mlr_model.fittedvalues
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# Residual plot (Homoscedasticity & Linearity Check)
+sns.scatterplot(x=fitted, y=residuals, alpha=0.6, ax=axes[0])
+axes[0].axhline(y=0, color='red', linestyle='--')
+axes[0].set_title('Residuals vs Fitted')
+axes[0].set_xlabel('Predicted Sales')
 axes[0].set_ylabel('Residuals')
 
-# 2. Normality Check: Q-Q Plot
+# Q-Q Plot (Normality Check - scaled correctly)
 sm.qqplot(residuals, line='s', ax=axes[1])
-axes[1].set_title('Normal Q-Q Plot')
-
-# 3. Normality Check: Residuals Distribution Histogram
-sns.histplot(residuals, kde=True, ax=axes[2])
-axes[2].set_title('Residuals Distribution')
+axes[1].set_title('Q-Q Plot')
 
 plt.tight_layout()
-plt.savefig('diagnostic_plots.png')
-print("[INFO] Diagnostic plots saved successfully as 'diagnostic_plots.png'")
+plt.show()
 
-# Simple Linear Regression – Marketing ROI Analysis
+# ==========================================
+# 8. Final Regression Equation
+# ==========================================
 
-## Project Overview
-This project performs an end-to-end Simple Linear Regression analysis on an enterprise marketing dataset. Using Python, `pandas`, and `statsmodels`, we explore which marketing channel (TV, Radio, or Social Media) yields the strongest return on investment (ROI) for Sales, fit an Ordinary Least Squares (OLS) model, and validate core regression assumptions.
+intercept = mlr_model.params['const']
+b_tv = mlr_model.params['TV']
+b_radio = mlr_model.params['Radio']
+b_social = mlr_model.params['Social_Media']
 
-## Key Findings
-- **Top Channel:** **TV Advertising** exhibits an extraordinary correlation of $r = 0.9995$ with sales volume.
-- **Model Efficiency ($R^2$):** **99.9%** of the variance in sales can be explained solely by TV marketing allocation.
-- **ROI Impact:** For every **\$1.00** increase in TV advertising expenditure, Sales increase predictably by **\$3.56**.
-- **Model Validity:** Assumptions of Linearity, Homoscedasticity, and Normality of residuals were fully met via diagnostic visualization metrics.
+print("\n========== FINAL EQUATION ==========")
+equation = (
+    f"Sales = {intercept:.4f} "
+    f"+ ({b_tv:.4f} × TV) "
+    f"+ ({b_radio:.4f} × Radio) "
+    f"+ ({b_social:.4f} × Social_Media)"
+)
+print(equation)
 
-## Project Structure
-- `regression_analysis.ipynb`: The complete executed data workspace.
-- `85334965-5736-457a-b8d4-a077e6872f84.csv`: Cleaned source marketing dataset.
-- `eda_plots.png`: Distribution and regression scatter plots for marketing channels.
-- `diagnostic_plots.png`: Residual, Q-Q, and homoscedasticity verification figures.
+# ==========================================
+# 9. Coefficient & Partial Effect Interpretation
+# ==========================================
 
-## Environment Setup Instructions
-To run the notebook locally, configure your Python environment using the instructions below:
+print("\n========== BUSINESS INTERPRETATION ==========")
+for col in features:
+    coef = mlr_model.params[col]
+    p_val = mlr_model.pvalues[col]
+    sig_text = "is statistically significant" if p_val < 0.05 else "is NOT statistically significant"
+    
+    print(
+        f"Holding all other variables constant, a 1-unit increase in {col} investment "
+        f"is associated with a {coef:.4f} unit change in Sales ({sig_text}, p-value = {p_val:.4f})."
+    )
 
-1. Clone the repository:
-   ```bash
-   git clone [https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git](https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git)
-   cd YOUR_REPOSITORY
+# ==========================================
+# 10. Business Recommendation
+# ==========================================
 
-jupyter notebook
-
-pip install pandas numpy matplotlib seaborn statsmodels scipy jupyter
+print("\n========== FINAL RECOMMENDATION ==========")
+print(
+"""
+1. Allocate marketing budget to channels prioritizing those with the highest, 
+   statistically significant positive partial coefficients (p < 0.05).
+2. Look at the final MLR summary: If a channel's p-value is greater than 0.05, 
+   consider reducing budget there as it does not have a reliable relationship with Sales.
+3. Use Adjusted R² instead of regular R² because it penalizes adding variables 
+   that do not improve model quality, giving us a true picture of model performance.
+"""
+)
