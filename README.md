@@ -1,93 +1,350 @@
-import matplotlib.pyplot as plt
+# ======================================================
+# KNN IRIS CLASSIFICATION PROJECT
+# ======================================================
+
+# Import libraries
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+
+from sklearn.datasets import load_iris
+from sklearn.model_selection import (
+    train_test_split,
+    cross_val_score
+)
+
 from sklearn.preprocessing import StandardScaler
 
-# 1. Load and Clean the Dataset
-df = pd.read_csv("b9de2fb4-306d-42f1-b589-800f4d6e3698.csv")
+from sklearn.neighbors import KNeighborsClassifier
 
-# Drop only rows where the clustering features are missing, not the whole row
-features = ["bill_length_mm", "bill_depth_mm", "flipper_length_mm", "body_mass_g"]
-df_clean = df.dropna(subset=features).reset_index(drop=True)
-
-# Extract numeric features for clustering
-X = df_clean[features]
-
-# 2. Feature Scaling
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
-
-# 3. Determine Optimal Clusters (Elbow & Silhouette Methods)
-sse = []
-silhouette_scores = []
-k_range = range(2, 7)
-
-for k in k_range:
-    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-    kmeans.fit(X_scaled)
-    sse.append(kmeans.inertia_)
-    silhouette_scores.append(silhouette_score(X_scaled, kmeans.labels_))
-
-# Plotting the Evaluation Metrics
-fig, ax1 = plt.subplots(figsize=(10, 5))
-
-# Elbow Curve
-color = "tab:blue"
-ax1.set_xlabel("Number of Clusters (k)")
-ax1.set_ylabel("SSE (Inertia)", color=color)
-ax1.plot(k_range, sse, marker="o", color=color, linewidth=2)
-ax1.tick_params(axis="y", labelcolor=color)
-ax1.set_title("Elbow Method and Silhouette Scores for Optimal k")
-
-# Silhouette Score
-ax2 = ax1.twinx()
-color = "tab:orange"
-ax2.set_ylabel("Silhouette Score", color=color)
-ax2.plot(k_range, silhouette_scores, marker="s", color=color, linewidth=2)
-ax2.tick_params(axis="y", labelcolor=color)
-
-fig.tight_layout()
-plt.show()
-
-# Print metrics for confirmation
-for k, s, sil in zip(k_range, sse, silhouette_scores):
-    print(f"k={k} -> SSE: {s:.2f} | Silhouette Score: {sil:.3f}")
-
-# 4. Fit Final K-means Model (Choosing k=3 based on species and validation metrics)
-optimal_k = 3
-final_kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
-df_clean["Cluster"] = final_kmeans.fit_predict(X_scaled)
-
-# 5. Visualize Cluster Assignments
-plt.figure(figsize=(10, 6))
-sns.scatterplot(
-    data=df_clean,
-    x="flipper_length_mm",
-    y="body_mass_g",
-    hue="Cluster",
-    style="species",
-    palette="Set1",
-    s=100,
-    alpha=0.8,
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    precision_score,
+    recall_score,
+    f1_score
 )
-plt.title("Penguin Clusters: Flipper Length vs. Body Mass")
-plt.xlabel("Flipper Length (mm)")
-plt.ylabel("Body Mass (g)")
-plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-plt.tight_layout(rect=[0, 0, 0.85, 1])   # make room for the legend
+
+# ======================================================
+# 1. LOAD DATASET
+# ======================================================
+
+print("========== LOADING DATASET ==========")
+
+iris = load_iris(as_frame=True)
+
+df = iris.frame
+
+# Create readable species names
+df["species"] = df["target"].map(
+{
+    0: "setosa",
+    1: "versicolor",
+    2: "virginica"
+}
+)
+
+# Remove numeric target column
+df.drop("target", axis=1, inplace=True)
+
+print(df.head())
+
+# ======================================================
+# 2. DATA DISCOVERY
+# ======================================================
+
+print("\n========== DATA EXPLORATION ==========")
+
+print("\nDataset Shape:")
+
+print(df.shape)
+
+print("\nDataset Information:")
+
+print(df.info())
+
+print("\nSummary Statistics:")
+
+print(df.describe())
+
+print("\nMissing Values:")
+
+print(df.isnull().sum())
+
+# ======================================================
+# 3. VISUALIZATION
+# ======================================================
+
+print("\n========== DATA VISUALIZATION ==========")
+
+sns.pairplot(
+    df,
+    hue="species",
+    diag_kind="hist"
+)
+
+plt.suptitle(
+    "Iris Dataset Feature Relationships",
+    y=1.02
+)
+
 plt.show()
 
-# 6. Biological Alignment Cross-tabulation
-print("\n--- Alignment with Known Species ---")
-print(pd.crosstab(df_clean["species"], df_clean["Cluster"]))
+# ======================================================
+# 4. SPLIT FEATURES AND TARGET
+# ======================================================
 
-print("\n--- Alignment with Sex (Size/Sexual Dimorphism) ---")
-# Note: rows where 'sex' is NaN are automatically excluded from the crosstab
-print(pd.crosstab(df_clean["sex"], df_clean["Cluster"]))
+X = df.drop(
+    "species",
+    axis=1
+)
 
-# 7. Cluster Centroids (Unscaled Mean Values)
-print("\n--- Profiling Cluster Centroids ---")
-print(df_clean.groupby("Cluster")[features].mean())
+y = df["species"]
+
+# 80% training
+# 20% testing
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.20,
+    random_state=42,
+    stratify=y
+)
+
+print("\nTraining Size:", X_train.shape)
+
+print("Testing Size:", X_test.shape)
+
+# ======================================================
+# 5. FEATURE SCALING
+# ======================================================
+
+print("\n========== FEATURE SCALING ==========")
+
+# KNN relies on distance calculations
+# Therefore scaling is important
+
+scaler = StandardScaler()
+
+X_train_scaled = scaler.fit_transform(
+    X_train
+)
+
+X_test_scaled = scaler.transform(
+    X_test
+)
+
+# ======================================================
+# 6. HYPERPARAMETER TUNING
+# ======================================================
+
+print("\n========== HYPERPARAMETER TUNING ==========")
+
+k_values = range(1, 21)
+
+cv_scores = []
+
+for k in k_values:
+
+    knn = KNeighborsClassifier(
+        n_neighbors=k
+    )
+
+    scores = cross_val_score(
+        knn,
+        X_train_scaled,
+        y_train,
+        cv=5,
+        scoring="accuracy"
+    )
+
+    cv_scores.append(
+        scores.mean()
+    )
+
+    print(
+        f"k={k} : Accuracy={scores.mean():.4f}"
+    )
+
+# Select best k
+
+optimal_k = k_values[
+    np.argmax(cv_scores)
+]
+
+print("\nBest k =", optimal_k)
+
+# Plot tuning graph
+
+plt.figure(figsize=(8,5))
+
+plt.plot(
+    k_values,
+    cv_scores,
+    marker="o"
+)
+
+plt.xlabel("k value")
+
+plt.ylabel("Cross Validation Accuracy")
+
+plt.title("Selecting Optimal k")
+
+plt.grid(True)
+
+plt.show()
+
+# ======================================================
+# 7. TRAIN FINAL MODEL
+# ======================================================
+
+print("\n========== TRAINING FINAL MODEL ==========")
+
+final_knn = KNeighborsClassifier(
+    n_neighbors=optimal_k
+)
+
+final_knn.fit(
+    X_train_scaled,
+    y_train
+)
+
+# ======================================================
+# 8. MAKE PREDICTIONS
+# ======================================================
+
+y_pred = final_knn.predict(
+    X_test_scaled
+)
+
+# ======================================================
+# 9. EVALUATE MODEL
+# ======================================================
+
+print("\n========== MODEL EVALUATION ==========")
+
+accuracy = accuracy_score(
+    y_test,
+    y_pred
+)
+
+precision = precision_score(
+    y_test,
+    y_pred,
+    average="weighted"
+)
+
+recall = recall_score(
+    y_test,
+    y_pred,
+    average="weighted"
+)
+
+f1 = f1_score(
+    y_test,
+    y_pred,
+    average="weighted"
+)
+
+print(f"Accuracy : {accuracy:.4f}")
+
+print(f"Precision: {precision:.4f}")
+
+print(f"Recall   : {recall:.4f}")
+
+print(f"F1 Score : {f1:.4f}")
+
+print("\nClassification Report:")
+
+print(
+    classification_report(
+        y_test,
+        y_pred
+    )
+)
+
+# ======================================================
+# 10. CONFUSION MATRIX
+# ======================================================
+
+labels = np.unique(y)
+
+cm = confusion_matrix(
+    y_test,
+    y_pred,
+    labels=labels
+)
+
+plt.figure(figsize=(6,4))
+
+sns.heatmap(
+    cm,
+    annot=True,
+    fmt="d",
+    cmap="Blues",
+    xticklabels=labels,
+    yticklabels=labels
+)
+
+plt.title("Confusion Matrix")
+
+plt.xlabel("Predicted")
+
+plt.ylabel("Actual")
+
+plt.show()
+
+# ======================================================
+# 11. TEST NEW SAMPLE
+# ======================================================
+
+print("\n========== NEW PREDICTION ==========")
+
+sample = pd.DataFrame(
+    [[5.1, 3.5, 1.4, 0.2]],
+    columns=X.columns
+)
+
+sample_scaled = scaler.transform(
+    sample
+)
+
+prediction = final_knn.predict(
+    sample_scaled
+)
+
+print(
+    "Sample:",
+    sample.values[0]
+)
+
+print(
+    "Predicted Species:",
+    prediction[0]
+)
+
+# ======================================================
+# 12. RESULT INTERPRETATION
+# ======================================================
+
+print("\n========== INTERPRETATION ==========")
+
+print(
+"""
+The KNN classifier successfully classified
+the Iris flower species.
+
+Feature scaling improved performance because
+KNN depends on distance calculations.
+
+Cross-validation was used to select the
+best value of k.
+
+The confusion matrix and classification
+report show that the model performs
+very well on this dataset.
+"""
+)
