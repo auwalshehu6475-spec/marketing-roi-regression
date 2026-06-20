@@ -1,51 +1,98 @@
-# ==========================================
-# STEP 2: TRAIN-TEST SPLIT & FEATURE SCALING
-# ==========================================
-print("\n--- Step 2: Split and Scale Data ---")
+import os
+import joblib
+import numpy as np
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field, ConfigDict
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X_encoded, y,
-    test_size=0.2,
-    random_state=42,
-    stratify=y
+app = FastAPI(
+    title="NBA Player Longevity Prediction API",
+    description="Gaussian Naive Bayes model for NBA career longevity prediction",
+    version="1.0.0"
 )
 
-# ⚠️ FIX: Scaling one-hot encoded data is optional
-# BEST PRACTICE: skip scaling OR use MinMaxScaler
+MODEL_PATH = "nb_nba_model.joblib"
 
-# Option A (recommended): no scaling
-X_train_scaled = X_train
-X_test_scaled = X_test
+model = None
+expected_features = None
 
-# ==========================================
-# STEP 3: KNN MODEL
-# ==========================================
 
-k_values = [1, 3, 5, 7, 9, 11]
-cv_scores = []
+@app.on_event("startup")
+def load_model():
+    global model, expected_features
 
-for k in k_values:
-    knn = KNeighborsClassifier(n_neighbors=k, metric='hamming')
-    scores = cross_val_score(knn, X_train_scaled, y_train, cv=5, scoring='accuracy')
-    cv_scores.append(scores.mean())
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(f"{MODEL_PATH} not found")
 
-best_k = k_values[np.argmax(cv_scores)]
+    payload = joblib.load(MODEL_PATH)
 
-print("\nBest K:", best_k)
+    model = payload.get("model")
+    expected_features = payload.get("features")
 
-# ==========================================
-# STEP 4: FINAL MODEL
-# ==========================================
+    if model is None or expected_features is None:
+        raise ValueError("Model file missing required keys: 'model' or 'features'")
 
-final_model = KNeighborsClassifier(n_neighbors=best_k, metric='hamming')
-final_model.fit(X_train_scaled, y_train)
 
-y_pred = final_model.predict(X_test_scaled)
+class PlayerFeatures(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
 
-# ==========================================
-# STEP 5: EVALUATION
-# ==========================================
+    fg: float = Field(..., description="Field Goal Percentage")
+    three_p: float = Field(..., alias="3p")
+    ft: float
+    reb: float
+    ast: float
+    stl: float
+    blk: float
+    tov: float
+    total_points: float
+    efficiency: float
 
-print("\nAccuracy:", accuracy_score(y_test, y_pred))
-print("\nConfusion Matrix:\n", confusion_matrix(y_test, y_pred))
-print("\nReport:\n", classification_report(y_test, y_pred))
+
+class PredictionResponse(BaseModel):
+    prediction: int
+    probability_class_0: float
+    probability_class_1: float
+    scouting_guidance: str
+
+
+@app.get("/")
+def health_check():
+    return {"status": "healthy", "model_loaded": model is not None}
+
+
+@app.post("/predict", response_model=PredictionResponse)
+def predict(player: PlayerFeatures):
+    try:
+        data = player.model_dump(by_alias=True)
+
+        # safer feature extraction
+        try:
+            X = np.array([data[feat] for feat in expected_features]).reshape(1, -1)
+        except KeyError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing feature in request or mismatch: {str(e)}"
+            )
+
+        pred = int(model.predict(X)[0])
+
+        # safer probability handling
+        if hasattr(model, "predict_proba"):
+            probs = model.predict_proba(X)[0]
+        else:
+            probs = [0.5, 0.5]
+
+        guidance = (
+            "HIGH CONFIDENCE PROSPECT: Fast-track scouting."
+            if pred == 1
+            else "POTENTIAL RISK: Requires deeper scouting validation."
+        )
+
+        return PredictionResponse(
+            prediction=pred,
+            probability_class_0=float(probs[0]),
+            probability_class_1=float(probs[1]),
+            scouting_guidance=guidance
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
