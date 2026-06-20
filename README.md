@@ -1,95 +1,166 @@
 import pandas as pd
 import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
 
-sns.set_theme(style="whitegrid")
-plt.rcParams['figure.figsize'] = (12, 8)
+from io import StringIO
 
-# ==========================================================
-# 1. LOAD DATA
-# ==========================================================
-df = pd.read_csv("0f484464-3cc8-4bfc-968b-b1a9fc4d4b1d.csv")
-
-drop_cols = [c for c in ['Unnamed: 0', 'name'] if c in df.columns]
-df_cleaned = df.drop(columns=drop_cols)
-
-# ==========================================================
-# 2. TARGET DISTRIBUTION
-# ==========================================================
-plt.figure(figsize=(6, 4))
-sns.countplot(data=df_cleaned, x='target_5yrs', palette='viridis')
-plt.title("Target Distribution")
-plt.show()
-
-print(df_cleaned['target_5yrs'].value_counts())
-
-# ==========================================================
-# 3. MISSING VALUES
-# ==========================================================
-print("\nMissing values:")
-print(df_cleaned.isnull().sum()[df_cleaned.isnull().sum() > 0])
-
-# ==========================================================
-# 4. FEATURE ENGINEERING (SAFE)
-# ==========================================================
-if 'min' in df_cleaned.columns:
-    df_cleaned['min'] = df_cleaned['min'].replace(0, np.nan)
-
-if 'pts' in df_cleaned.columns:
-    df_cleaned['pts_per_min'] = df_cleaned['pts'] / df_cleaned['min']
-
-df_cleaned['efficiency_rating'] = (
-    df_cleaned[['pts','reb','ast','stl','blk']].sum(axis=1)
-    - df_cleaned['tov']
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+    classification_report
 )
 
-df_cleaned.replace([np.inf, -np.inf], np.nan, inplace=True)
-df_cleaned['pts_per_min'] = df_cleaned['pts_per_min'].fillna(0)
+# ==========================================
+# STEP 1: LOAD DATA
+# ==========================================
 
-# ==========================================================
-# 5. CORRELATION (FIXED)
-# ==========================================================
-features_only = df_cleaned.drop(columns=['target_5yrs'])
-corr_matrix = features_only.select_dtypes(include=[np.number]).corr()
-
-plt.figure(figsize=(12, 8))
-sns.heatmap(corr_matrix, cmap="coolwarm", square=True)
-plt.title("Correlation Matrix")
-plt.show()
-
-upper_tri = corr_matrix.where(
-    np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
-)
-
-redundant_features = [
-    col for col in upper_tri.columns
-    if any(upper_tri[col] > 0.90)
+columns = [
+    'age', 'menopause', 'tumor-size', 'inv-nodes',
+    'node-caps', 'deg-malig', 'breast', 'breast-quad',
+    'irradiat', 'Class'
 ]
 
-print("\nHighly correlated features:", redundant_features)
+df = pd.read_csv(
+    StringIO(raw_data),
+    header=None,
+    names=columns,
+    skipinitialspace=True
+)
 
-df_reduced = df_cleaned.drop(columns=redundant_features)
+# Clean quotes + missing values
+df = df.apply(lambda col: col.str.replace("'", "", regex=False))
+df.replace('?', np.nan, inplace=True)
+df.dropna(inplace=True)
 
-# ==========================================================
-# 6. FEATURE MATRIX (NO LEAKAGE FIX)
-# ==========================================================
-X = df_reduced.drop(columns=['target_5yrs'])
-y = df_reduced['target_5yrs']
+# Convert numeric column properly
+df['deg-malig'] = df['deg-malig'].astype(int)
 
-# numeric-only safety
-X = X.select_dtypes(include=[np.number])
+# ==========================================
+# STEP 2: SPLIT FEATURES / TARGET
+# ==========================================
 
-# Imputer + scaler (OK for now, but ideally inside pipeline later)
-imputer = SimpleImputer(strategy='median')
-X_imputed = imputer.fit_transform(X)
+X = df.drop(columns=['Class'])
+y = df['Class']
 
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X_imputed)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y,
+    test_size=0.2,
+    random_state=42,
+    stratify=y
+)
 
-X_final = pd.DataFrame(X_scaled, columns=X.columns)
+# ==========================================
+# STEP 3: PREPROCESSING PIPELINE
+# ==========================================
 
-print("\nFinal shape:", X_final.shape)
-print(X_final.head())
+categorical_features = [
+    'age', 'menopause', 'tumor-size', 'inv-nodes',
+    'node-caps', 'breast', 'breast-quad', 'irradiat'
+]
+
+numeric_features = ['deg-malig']
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features),
+        ('num', 'passthrough', numeric_features)
+    ]
+)
+
+# ==========================================
+# STEP 4: MODEL + PIPELINE
+# ==========================================
+
+def create_model(k):
+    return Pipeline(steps=[
+        ('preprocess', preprocessor),
+        ('knn', KNeighborsClassifier(
+            n_neighbors=k,
+            metric='hamming',
+            weights='distance'
+        ))
+    ])
+
+# ==========================================
+# STEP 5: CROSS-VALIDATION FOR BEST K
+# ==========================================
+
+k_values = [1, 3, 5, 7, 9, 11]
+cv_scores = []
+
+for k in k_values:
+    model = create_model(k)
+    scores = cross_val_score(
+        model,
+        X_train,
+        y_train,
+        cv=5,
+        scoring='f1_weighted'
+    )
+    cv_scores.append(scores.mean())
+
+optimal_k = k_values[int(np.argmax(cv_scores))]
+
+print("=== Hyperparameter Tuning Results ===")
+for k, score in zip(k_values, cv_scores):
+    print(f"k = {k}: F1-score = {score:.4f}")
+
+print(f"\nOptimal k selected: {optimal_k}\n")
+
+# Plot results
+plt.figure(figsize=(8, 5))
+plt.plot(k_values, cv_scores, marker='o')
+plt.title("K vs Cross-Validated F1 Score")
+plt.xlabel("K Value")
+plt.ylabel("F1 Score")
+plt.grid(True)
+plt.show()
+
+# ==========================================
+# STEP 6: FINAL MODEL TRAINING
+# ==========================================
+
+final_model = create_model(optimal_k)
+final_model.fit(X_train, y_train)
+
+y_pred = final_model.predict(X_test)
+
+# ==========================================
+# STEP 7: EVALUATION
+# ==========================================
+
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred, pos_label='recurrence-events', zero_division=0)
+recall = recall_score(y_test, y_pred, pos_label='recurrence-events', zero_division=0)
+f1 = f1_score(y_test, y_pred, pos_label='recurrence-events', zero_division=0)
+
+print("=== Final Model Performance ===")
+print(f"Accuracy : {accuracy:.4f}")
+print(f"Precision: {precision:.4f}")
+print(f"Recall   : {recall:.4f}")
+print(f"F1-score : {f1:.4f}\n")
+
+print("Confusion Matrix:")
+print(confusion_matrix(y_test, y_pred))
+
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred, zero_division=0))
+
+# ==========================================
+# STEP 8: SAFE INFERENCE (NEW DATA)
+# ==========================================
+
+sample = X_test.iloc[[0]].copy()   # safe structure-preserving sample
+
+prediction = final_model.predict(sample)
+
+print("\n=== Inference ===")
+print("Predicted class:", prediction[0])
