@@ -1,189 +1,369 @@
+from fastapi import FastAPI, HTTPException, status
+from pydantic import BaseModel, Field
+from typing import List, Dict, Optional
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.datasets import load_iris
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, classification_report
-import warnings
-warnings.filterwarnings('ignore')
+import joblib
+from datetime import datetime
 
-sns.set_style('whitegrid')
-plt.rcParams['figure.figsize'] = (10, 6)
+try:
+    model_data = joblib.load("nba_gnb_model.pkl")
 
-iris = load_iris()
-X = pd.DataFrame(iris.data, columns=iris.feature_names)
-y = pd.Series(iris.target, name='target')
-df = X.copy()
-df['species'] = y.map({0: 'setosa', 1: 'versicolor', 2: 'virginica'})
+    MODEL = model_data["model"]
+    SCALER = model_data["scaler"]
+    FEATURE_NAMES = model_data["feature_names"]
+    METRICS = model_data["metrics"]
+    FEATURE_IMPORTANCE = model_data["feature_importance"]
 
-print(f"Dataset Shape: {df.shape}")
-print(f"Features: {iris.feature_names}")
-print(f"Classes: {list(iris.target_names)}")
-print(f"\nClass Distribution:\n{df['species'].value_counts()}")
-print(f"\nMissing Values: {df.isnull().sum().sum()}")
-print(f"\nStatistical Summary:\n{df.describe().round(3)}")
+except Exception as e:
+    raise RuntimeError(f"Failed to load model: {str(e)}")
 
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-axes = axes.ravel()
-for idx, col in enumerate(iris.feature_names):
-    sns.histplot(data=df, x=col, hue='species', kde=True, ax=axes[idx], palette='viridis')
-    axes[idx].set_title(f'Distribution of {col}')
-plt.tight_layout()
-plt.savefig('feature_distributions.png', dpi=150, bbox_inches='tight')
-plt.close()
+app = FastAPI(
+    title="NBA Player Longevity Prediction API",
+    description="Predict whether an NBA rookie will have a 5+ year career.",
+    version="1.0.0"
+)
 
-pairplot = sns.pairplot(df, hue='species', palette='viridis', diag_kind='kde', height=2.5)
-pairplot.fig.suptitle('Iris Feature Pairwise Relationships', y=1.02, fontsize=14)
-plt.savefig('pairplot.png', dpi=150, bbox_inches='tight')
-plt.close()
+class PlayerStats(BaseModel):
 
-plt.figure(figsize=(8, 6))
-corr = X.corr()
-sns.heatmap(corr, annot=True, cmap='coolwarm', center=0, square=True, linewidths=0.5)
-plt.title('Feature Correlation Matrix')
-plt.savefig('correlation_heatmap.png', dpi=150, bbox_inches='tight')
-plt.close()
+    GP: float = Field(..., ge=0, le=82)
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42, stratify=y)
+    MIN: float = Field(..., ge=0, le=48)
 
-print(f"\nTraining set: {X_train.shape[0]} samples")
-print(f"Test set: {X_test.shape[0]} samples")
-print(f"Training class distribution:\n{y_train.value_counts().sort_index()}")
-print(f"Test class distribution:\n{y_test.value_counts().sort_index()}")
+    PTS: float = Field(..., ge=0, le=50)
 
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+    FGM: float = Field(..., ge=0)
 
-print(f"\nScaled Training Data Summary:\n{pd.DataFrame(X_train_scaled, columns=iris.feature_names).describe().round(3)}")
+    FGA: float = Field(..., ge=0)
 
-knn_baseline = KNeighborsClassifier(n_neighbors=5, metric='minkowski', p=2)
-knn_baseline.fit(X_train_scaled, y_train)
-y_pred_baseline = knn_baseline.predict(X_test_scaled)
-baseline_acc = accuracy_score(y_test, y_pred_baseline)
+    FG_Percent: float = Field(..., ge=0, le=100, alias="FG%")
 
-print(f"\nBaseline KNN (k=5) Accuracy: {baseline_acc:.4f}")
-print(f"\nClassification Report:\n{classification_report(y_test, y_pred_baseline, target_names=iris.target_names)}")
+    ThreeP_Made: float = Field(..., ge=0, alias="3P Made")
 
-k_values = [1, 3, 5, 7, 9, 11]
-cv_scores = []
-cv_stds = []
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    ThreePA: float = Field(..., ge=0, alias="3PA")
 
-for k in k_values:
-    knn = KNeighborsClassifier(n_neighbors=k, metric='minkowski', p=2)
-    scores = cross_val_score(knn, X_train_scaled, y_train, cv=cv, scoring='accuracy')
-    cv_scores.append(scores.mean())
-    cv_stds.append(scores.std())
-    print(f'k={k:2d}: CV Accuracy = {scores.mean():.4f} (+/- {scores.std():.4f})')
+    ThreeP_Percent: float = Field(..., ge=0, le=100, alias="3P%")
 
-optimal_idx = np.argmax(cv_scores)
-optimal_k = k_values[optimal_idx]
-print(f'\nOptimal k: {optimal_k} (CV Accuracy: {cv_scores[optimal_idx]:.4f})')
+    FTM: float = Field(..., ge=0)
 
-plt.figure(figsize=(10, 6))
-plt.errorbar(k_values, cv_scores, yerr=cv_stds, fmt='o-', capsize=5, color='steelblue', ecolor='lightcoral', linewidth=2, markersize=8)
-plt.axvline(x=optimal_k, color='green', linestyle='--', alpha=0.7, label=f'Optimal k={optimal_k}')
-plt.xlabel('Number of Neighbors (k)', fontsize=12)
-plt.ylabel('Cross-Validation Accuracy', fontsize=12)
-plt.title('KNN Hyperparameter Tuning: k vs. Accuracy', fontsize=14)
-plt.xticks(k_values)
-plt.ylim([min(cv_scores) - 0.05, 1.05])
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.savefig('k_vs_accuracy.png', dpi=150, bbox_inches='tight')
-plt.close()
+    FTA: float = Field(..., ge=0)
 
-knn_final = KNeighborsClassifier(n_neighbors=optimal_k, metric='minkowski', p=2)
-knn_final.fit(X_train_scaled, y_train)
-y_pred = knn_final.predict(X_test_scaled)
+    FT_Percent: float = Field(..., ge=0, le=100, alias="FT%")
 
-accuracy = accuracy_score(y_test, y_pred)
-precision = precision_score(y_test, y_pred, average='weighted')
-recall = recall_score(y_test, y_pred, average='weighted')
-f1 = f1_score(y_test, y_pred, average='weighted')
+    OREB: float = Field(..., ge=0)
 
-print("\n===== FINAL MODEL EVALUATION =====")
-print(f'Optimal k: {optimal_k}')
-print(f'Accuracy:  {accuracy:.4f}')
-print(f'Precision: {precision:.4f}')
-print(f'Recall:    {recall:.4f}')
-print(f'F1-Score:  {f1:.4f}')
+    DREB: float = Field(..., ge=0)
 
-cm = confusion_matrix(y_test, y_pred)
-plt.figure(figsize=(8, 6))
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=iris.target_names, yticklabels=iris.target_names, square=True, linewidths=0.5)
-plt.xlabel('Predicted Label', fontsize=12)
-plt.ylabel('True Label', fontsize=12)
-plt.title(f'Confusion Matrix (k={optimal_k})', fontsize=14)
-plt.savefig('confusion_matrix.png', dpi=150, bbox_inches='tight')
-plt.close()
+    REB: float = Field(..., ge=0)
 
-print("\nDetailed Classification Report:")
-print(classification_report(y_test, y_pred, target_names=iris.target_names, digits=4))
+    AST: float = Field(..., ge=0)
 
-new_samples = np.array([
-    [5.1, 3.5, 1.4, 0.2],
-    [6.2, 3.4, 5.4, 2.3],
-    [5.9, 3.0, 4.2, 1.5],
-    [4.9, 3.1, 1.5, 0.1],
-])
+    STL: float = Field(..., ge=0)
 
-new_samples_scaled = scaler.transform(new_samples)
-predictions = knn_final.predict(new_samples_scaled)
-probabilities = knn_final.predict_proba(new_samples_scaled)
+    BLK: float = Field(..., ge=0)
 
-print("\n===== NEW SAMPLE PREDICTIONS =====")
-for i, (sample, pred, prob) in enumerate(zip(new_samples, predictions, probabilities)):
-    species = iris.target_names[pred]
-    confidence = prob[pred]
-    print(f'Sample {i+1}: {sample}')
-    print(f'  Predicted: {species} (confidence: {confidence:.4f})')
-    print(f'  Class probabilities: {dict(zip(iris.target_names, prob.round(4)))}')
-    print()
+    TOV: float = Field(..., ge=0)
 
-results = []
+    class Config:
+        populate_by_name = True
 
-knn_raw = KNeighborsClassifier(n_neighbors=optimal_k)
-knn_raw.fit(X_train, y_train)
-acc_raw = accuracy_score(y_test, knn_raw.predict(X_test))
-results.append(('No Scaling', acc_raw))
 
-knn_std = KNeighborsClassifier(n_neighbors=optimal_k)
-knn_std.fit(X_train_scaled, y_train)
-acc_std = accuracy_score(y_test, knn_std.predict(X_test_scaled))
-results.append(('StandardScaler', acc_std))
+class PredictionResponse(BaseModel):
 
-minmax = MinMaxScaler()
-X_train_mm = minmax.fit_transform(X_train)
-X_test_mm = minmax.transform(X_test)
-knn_mm = KNeighborsClassifier(n_neighbors=optimal_k)
-knn_mm.fit(X_train_mm, y_train)
-acc_mm = accuracy_score(y_test, knn_mm.predict(X_test_mm))
-results.append(('MinMaxScaler', acc_mm))
+    player_id: Optional[str] = None
 
-for metric in ['euclidean', 'manhattan', 'chebyshev']:
-    knn_dist = KNeighborsClassifier(n_neighbors=optimal_k, metric=metric)
-    knn_dist.fit(X_train_scaled, y_train)
-    acc = accuracy_score(y_test, knn_dist.predict(X_test_scaled))
-    results.append((f'{metric.capitalize()} Distance', acc))
+    prediction: int
 
-comparison_df = pd.DataFrame(results, columns=['Configuration', 'Test Accuracy'])
-print("===== SCALING & DISTANCE METRIC COMPARISON =====")
-print(comparison_df.to_string(index=False))
+    prediction_label: str
 
-plt.figure(figsize=(10, 5))
-colors = ['coral' if 'Scaling' in cfg or 'Distance' in cfg else 'steelblue' for cfg in comparison_df['Configuration']]
-bars = plt.bar(comparison_df['Configuration'], comparison_df['Test Accuracy'], color=colors, edgecolor='black')
-plt.ylim([0.8, 1.05])
-plt.ylabel('Test Accuracy', fontsize=12)
-plt.title('Impact of Scaling and Distance Metrics on KNN Performance', fontsize=14)
-plt.xticks(rotation=15, ha='right')
-for bar, acc in zip(bars, comparison_df['Test Accuracy']):
-    plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005, f'{acc:.4f}', ha='center', va='bottom', fontweight='bold')
-plt.tight_layout()
-plt.savefig('scaling_comparison.png', dpi=150, bbox_inches='tight')
-plt.close()
+    confidence: float
+
+    confidence_tier: str
+
+    risk_assessment: str
+
+    feature_contributions: Dict[str, float]
+
+    model_version: str = "gnb-v1.0"
+
+    timestamp: str
+
+
+class BatchPredictionRequest(BaseModel):
+
+    players: List[PlayerStats]
+
+
+class BatchPredictionResponse(BaseModel):
+
+    predictions: List[PredictionResponse]
+
+    summary: Dict[str, int]
+
+
+class ModelMetrics(BaseModel):
+
+    accuracy: float
+
+    precision: float
+
+    recall: float
+
+    f1_score: float
+
+    auc_roc: float
+
+    confusion_matrix: List[List[int]]
+
+    feature_importance: Dict[str, float]
+
+    total_predictions: int = 0
+
+
+class HealthCheck(BaseModel):
+
+    status: str
+
+    model_loaded: bool
+
+    model_version: str
+
+    timestamp: str
+
+
+def calculate_feature_contributions(features_scaled):
+
+    contributions = {}
+
+    for i, feature in enumerate(FEATURE_NAMES):
+
+        mean_diff = abs(
+            MODEL.theta_[1, i] - MODEL.theta_[0, i]
+        )
+
+        contributions[feature] = round(
+            float(mean_diff * abs(features_scaled[0, i])),
+            4
+        )
+
+    total = sum(contributions.values())
+
+    if total > 0:
+
+        contributions = {
+            k: round(v / total * 100, 2)
+            for k, v in contributions.items()
+        }
+
+    return dict(
+        sorted(
+            contributions.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:5]
+    )
+
+
+def get_confidence_tier(probability):
+
+    if probability >= 0.85 or probability <= 0.15:
+
+        return "High"
+
+    elif probability >= 0.65 or probability <= 0.35:
+
+        return "Medium"
+
+    return "Low"
+
+
+def get_risk_assessment(prediction, confidence):
+
+    if prediction == 1:
+
+        if confidence > 0.85:
+
+            return "STRONG RECOMMEND"
+
+        elif confidence > 0.65:
+
+            return "RECOMMEND"
+
+        else:
+
+            return "CONDITIONAL"
+
+    else:
+
+        if confidence > 0.85:
+
+            return "AVOID"
+
+        elif confidence > 0.65:
+
+            return "CAUTION"
+
+        else:
+
+            return "RE-EVALUATE"
+
+
+@app.get("/", response_model=HealthCheck)
+
+async def root():
+
+    return HealthCheck(
+
+        status="healthy",
+
+        model_loaded=True,
+
+        model_version="gnb-v1.0",
+
+        timestamp=datetime.utcnow().isoformat()
+    )
+
+
+@app.get("/health", response_model=HealthCheck)
+
+async def health_check():
+
+    return await root()
+
+
+@app.post("/predict", response_model=PredictionResponse)
+
+async def predict(
+        player: PlayerStats,
+        player_id: Optional[str] = None
+):
+
+    try:
+
+        features = np.array([[
+            player.GP,
+            player.MIN,
+            player.PTS,
+            player.FGM,
+            player.FGA,
+            player.FG_Percent,
+            player.ThreeP_Made,
+            player.ThreePA,
+            player.ThreeP_Percent,
+            player.FTM,
+            player.FTA,
+            player.FT_Percent,
+            player.OREB,
+            player.DREB,
+            player.REB,
+            player.AST,
+            player.STL,
+            player.BLK,
+            player.TOV
+        ]])
+
+        features_scaled = SCALER.transform(features)
+
+        prediction = int(
+            MODEL.predict(features_scaled)[0]
+        )
+
+        probabilities = MODEL.predict_proba(features_scaled)[0]
+
+        confidence = float(probabilities[prediction])
+
+        contributions = calculate_feature_contributions(features_scaled)
+
+        return PredictionResponse(
+
+            player_id=player_id,
+
+            prediction=prediction,
+
+            prediction_label=(
+                "5+ Year Career"
+                if prediction == 1
+                else "< 5 Year Career"
+            ),
+
+            confidence=round(confidence, 4),
+
+            confidence_tier=get_confidence_tier(confidence),
+
+            risk_assessment=get_risk_assessment(
+                prediction,
+                confidence
+            ),
+
+            feature_contributions=contributions,
+
+            timestamp=datetime.utcnow().isoformat()
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Prediction error: {str(e)}"
+        )
+
+
+@app.post(
+    "/predict/batch",
+    response_model=BatchPredictionResponse
+)
+
+async def predict_batch(
+        request: BatchPredictionRequest
+):
+
+    predictions = []
+
+    summary = {
+        "five_plus_years": 0,
+        "less_than_five": 0,
+        "high_confidence": 0
+    }
+
+    for idx, player in enumerate(request.players):
+
+        result = await predict(
+            player,
+            player_id=f"player_{idx+1}"
+        )
+
+        predictions.append(result)
+
+        if result.prediction == 1:
+
+            summary["five_plus_years"] += 1
+
+        else:
+
+            summary["less_than_five"] += 1
+
+        if result.confidence_tier == "High":
+
+            summary["high_confidence"] += 1
+
+    return BatchPredictionResponse(
+        predictions=predictions,
+        summary=summary
+    )
+
+
+@app.get(
+    "/metrics",
+    response_model=ModelMetrics
+)
+
+async def get_metrics():
+
+    return ModelMetrics(
+
+        accuracy=METRICS["accuracy"],
+
+        precision=METRICS["precision"],
+
+        recall=METRICS["recall"],
+
+        f1_score=METRICS["
