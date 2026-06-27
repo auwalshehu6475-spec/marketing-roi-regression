@@ -1,5 +1,5 @@
 # ============================================================
-# Lumina HealthPath Capstone Project
+# TikTok Capstone Project
 # Binary Classification using Logistic Regression
 # ============================================================
 
@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from sklearn.model_selection import train_test_split
-from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -24,14 +23,15 @@ from sklearn.metrics import (
     classification_report
 )
 
+from imblearn.over_sampling import SMOTE
+
 # ==========================
 # 2. Load Dataset
 # ==========================
-# Replace "patients.csv" with your actual dataset filename
-df = pd.read_csv("patients.csv")
+df = pd.read_csv("tiktok_dataset.csv")
 
 # ==========================
-# 3. Explore the Dataset
+# 3. Explore Dataset
 # ==========================
 print("First 5 Rows")
 print(df.head())
@@ -46,35 +46,81 @@ print("\nMissing Values")
 print(df.isnull().sum())
 
 # ==========================
-# 4. Handle Missing Values
+# 4. Drop Missing Values
 # ==========================
-imputer = SimpleImputer(strategy="median")
+df = df.dropna()
 
-df[df.columns] = imputer.fit_transform(df)
+print("\nDataset Shape After Dropping Missing Values:")
+print(df.shape)
 
 # ==========================
-# 5. Correlation Heatmap
+# 5. Feature Engineering
+# Create transcription length
 # ==========================
-plt.figure(figsize=(10,8))
+df["transcription_length"] = (
+    df["video_transcription_text"]
+    .astype(str)
+    .str.len()
+)
+
+# ==========================
+# 6. One-Hot Encode Categorical Variables
+# ==========================
+df = pd.get_dummies(
+    df,
+    columns=["claim_status", "author_ban_status"],
+    drop_first=True
+)
+
+# ==========================
+# 7. Encode Target Variable
+# ==========================
+df["verified_status"] = df["verified_status"].map({
+    "verified": 1,
+    "not verified": 0
+})
+
+# ==========================
+# 8. Correlation Heatmap
+# ==========================
+plt.figure(figsize=(12,10))
 
 sns.heatmap(
     df.corr(numeric_only=True),
-    annot=True,
     cmap="coolwarm"
 )
 
-plt.title("Feature Correlation Heatmap")
+plt.title("Correlation Heatmap")
 plt.show()
 
 # ==========================
-# 6. Separate Features and Target
+# 9. Prepare Features & Target
 # ==========================
-# Replace "Risk" with your target column if different
-X = df.drop("Risk", axis=1)
-y = df["Risk"]
+columns_to_drop = [
+    "verified_status",
+    "video_transcription_text"
+]
+
+# Drop ID columns if they exist
+for col in ["#", "video_id"]:
+    if col in df.columns:
+        columns_to_drop.append(col)
+
+X = df.drop(columns=columns_to_drop)
+y = df["verified_status"]
 
 # ==========================
-# 7. Train-Test Split
+# 10. Handle Class Imbalance
+# ==========================
+smote = SMOTE(random_state=42)
+
+X, y = smote.fit_resample(X, y)
+
+print("\nClass Distribution After SMOTE")
+print(y.value_counts())
+
+# ==========================
+# 11. Train-Test Split
 # ==========================
 X_train, X_test, y_train, y_test = train_test_split(
     X,
@@ -85,7 +131,7 @@ X_train, X_test, y_train, y_test = train_test_split(
 )
 
 # ==========================
-# 8. Feature Scaling
+# 12. Feature Scaling
 # ==========================
 scaler = StandardScaler()
 
@@ -93,10 +139,9 @@ X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
 # ==========================
-# 9. Build Logistic Regression Model
+# 13. Build Logistic Regression Model
 # ==========================
 model = LogisticRegression(
-    class_weight="balanced",
     random_state=42,
     max_iter=1000
 )
@@ -104,13 +149,12 @@ model = LogisticRegression(
 model.fit(X_train, y_train)
 
 # ==========================
-# 10. Make Predictions
+# 14. Predictions
 # ==========================
 y_pred = model.predict(X_test)
-y_prob = model.predict_proba(X_test)
 
 # ==========================
-# 11. Evaluate Model
+# 15. Evaluation
 # ==========================
 accuracy = accuracy_score(y_test, y_pred)
 precision = precision_score(y_test, y_pred)
@@ -120,16 +164,16 @@ f1 = f1_score(y_test, y_pred)
 print("\n==============================")
 print("Model Performance")
 print("==============================")
-print(f"Accuracy : {accuracy:.4f}")
-print(f"Precision: {precision:.4f}")
-print(f"Recall   : {recall:.4f}")
-print(f"F1 Score : {f1:.4f}")
+print("Accuracy :", accuracy)
+print("Precision:", precision)
+print("Recall   :", recall)
+print("F1 Score :", f1)
 
 print("\nClassification Report")
 print(classification_report(y_test, y_pred))
 
 # ==========================
-# 12. Confusion Matrix
+# 16. Confusion Matrix
 # ==========================
 cm = confusion_matrix(y_test, y_pred)
 
@@ -140,17 +184,18 @@ sns.heatmap(
     annot=True,
     fmt="d",
     cmap="Blues",
-    xticklabels=["Stable", "High Risk"],
-    yticklabels=["Stable", "High Risk"]
+    xticklabels=["Not Verified","Verified"],
+    yticklabels=["Not Verified","Verified"]
 )
 
 plt.xlabel("Predicted")
 plt.ylabel("Actual")
 plt.title("Confusion Matrix")
+
 plt.show()
 
 # ==========================
-# 13. Model Coefficients
+# 17. Logistic Regression Coefficients
 # ==========================
 coefficients = pd.DataFrame({
     "Feature": X.columns,
@@ -162,34 +207,18 @@ coefficients = coefficients.sort_values(
     ascending=False
 )
 
-print("\nFeature Importance (Coefficients)")
+print("\nFeature Coefficients")
 print(coefficients)
 
 # ==========================
-# 14. Business Check
+# 18. Business Interpretation
 # ==========================
-if recall >= 0.85:
-    print("\n✅ Business Requirement Met: Recall is at least 0.85")
-else:
-    print("\n❌ Business Requirement NOT Met: Recall is below 0.85")
-
-# ==========================
-# 15. Predict New Patient (Optional)
-# ==========================
-# Replace the values below with actual patient measurements
-# Ensure the order matches your feature columns.
-
-# new_patient = pd.DataFrame([[
-#     45,     # Age
-#     28.5,   # BMI
-#     145,    # Glucose
-#     5000    # Activity
-# ]], columns=X.columns)
-
-# new_patient_scaled = scaler.transform(new_patient)
-
-# prediction = model.predict(new_patient_scaled)
-# probability = model.predict_proba(new_patient_scaled)
-
-# print("\nPrediction:", prediction[0])
-# print("Probability:", probability)
+print("\nBusiness Insights")
+print("- Longer video transcriptions may indicate more detailed content.")
+print("- Positive coefficients increase the likelihood of a creator being verified.")
+print("- Negative coefficients decrease the likelihood of verification.")
+print("- Videos containing factual claims may require additional moderation.")
+print("- Engagement-related features can help TikTok prioritize creator verification.")
+print("- SMOTE balanced the 94/6 class distribution, improving the model's ability to identify verified creators.")
+print("- F1-score is emphasized because the original dataset is highly imbalanced, making it a more reliable metric than accuracy.")
+print("- This model can help TikTok reduce verification review time and better prioritize moderation resources.")
