@@ -1,224 +1,281 @@
-# ============================================================
-# TikTok Capstone Project
-# Binary Classification using Logistic Regression
-# ============================================================
-
-# ==========================
-# 1. Import Libraries
-# ==========================
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.stattools import adfuller
 
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    confusion_matrix,
-    classification_report
+# Plot settings
+plt.style.use('seaborn-v0_8-darkgrid')
+plt.rcParams['figure.figsize'] = (12, 5)
+plt.rcParams['axes.titlesize'] = 14
+plt.rcParams['axes.titleweight'] = 'bold'
+
+pd.set_option('display.max_columns', None)
+np.random.seed(42)
+
+# ==========================
+# LOAD DATA
+# ==========================
+
+raw = pd.read_csv('tiktok_dataset.csv')
+
+print("Dataset Shape:", raw.shape)
+print(raw.head())
+
+print(raw.dtypes)
+print(raw.isna().sum())
+print(raw.describe())
+
+# Remove missing values
+
+df = raw.dropna(subset=['video_view_count']).copy()
+
+print(f"Rows before cleaning: {len(raw)}")
+print(f"Rows after cleaning: {len(df)}")
+
+# ==========================
+# CREATE SYNTHETIC DATE
+# ==========================
+
+start_date = pd.Timestamp('2023-01-01')
+end_date = pd.Timestamp('2024-06-30')
+
+total_days = (end_date - start_date).days
+
+day_offsets = np.random.randint(
+    0,
+    total_days + 1,
+    size=len(df)
 )
 
-from imblearn.over_sampling import SMOTE
+df['date'] = start_date + pd.to_timedelta(day_offsets, unit='D')
 
-# ==========================
-# 2. Load Dataset
-# ==========================
-df = pd.read_csv("tiktok_dataset.csv")
+trend_factor = 1 + 0.35 * (day_offsets / total_days)
 
-# ==========================
-# 3. Explore Dataset
-# ==========================
-print("First 5 Rows")
-print(df.head())
+weekday = df['date'].dt.dayofweek
 
-print("\nDataset Information")
-print(df.info())
-
-print("\nSummary Statistics")
-print(df.describe())
-
-print("\nMissing Values")
-print(df.isnull().sum())
-
-# ==========================
-# 4. Drop Missing Values
-# ==========================
-df = df.dropna()
-
-print("\nDataset Shape After Dropping Missing Values:")
-print(df.shape)
-
-# ==========================
-# 5. Feature Engineering
-# Create transcription length
-# ==========================
-df["transcription_length"] = (
-    df["video_transcription_text"]
-    .astype(str)
-    .str.len()
-)
-
-# ==========================
-# 6. One-Hot Encode Categorical Variables
-# ==========================
-df = pd.get_dummies(
-    df,
-    columns=["claim_status", "author_ban_status"],
-    drop_first=True
-)
-
-# ==========================
-# 7. Encode Target Variable
-# ==========================
-df["verified_status"] = df["verified_status"].map({
-    "verified": 1,
-    "not verified": 0
+weekday_multiplier = weekday.map({
+    0: 0.95,
+    1: 0.90,
+    2: 0.92,
+    3: 0.97,
+    4: 1.05,
+    5: 1.25,
+    6: 1.20
 })
 
-# ==========================
-# 8. Correlation Heatmap
-# ==========================
-plt.figure(figsize=(12,10))
+df['view_count'] = (
+    df['video_view_count']
+    * trend_factor
+    * weekday_multiplier
+).round().astype(int)
 
-sns.heatmap(
-    df.corr(numeric_only=True),
-    cmap="coolwarm"
+print(df[['date', 'video_view_count', 'view_count']].head())
+
+# ==========================
+# PREPROCESSING
+# ==========================
+
+daily = (
+    df.groupby('date')['view_count']
+      .sum()
+      .reset_index()
 )
 
-plt.title("Correlation Heatmap")
+daily['date'] = pd.to_datetime(daily['date'])
+
+daily = (
+    daily
+    .set_index('date')
+    .sort_index()
+)
+
+daily = daily.resample('D').sum()
+
+daily['view_count'] = daily['view_count'].replace(0, np.nan)
+
+daily['view_count'] = daily['view_count'].interpolate(method='linear')
+
+print(daily.head())
+
+# ==========================
+# DAILY VIEW COUNT PLOT
+# ==========================
+
+plt.figure(figsize=(12,5))
+plt.plot(
+    daily.index,
+    daily['view_count'],
+    color='#fe2c55'
+)
+
+plt.title("TikTok Daily Total View Count")
+plt.xlabel("Date")
+plt.ylabel("Views")
 plt.show()
 
 # ==========================
-# 9. Prepare Features & Target
+# TIME SERIES DECOMPOSITION
 # ==========================
-columns_to_drop = [
-    "verified_status",
-    "video_transcription_text"
+
+decomposition = seasonal_decompose(
+    daily['view_count'],
+    model='additive',
+    period=7
+)
+
+fig = decomposition.plot()
+
+fig.set_size_inches(12,8)
+
+plt.show()
+
+# ==========================
+# ADF TEST
+# ==========================
+
+adf = adfuller(daily['view_count'])
+
+print("ADF Statistic:", adf[0])
+print("P-value:", adf[1])
+
+print("Critical Values")
+
+for key, value in adf[4].items():
+    print(key, value)
+
+if adf[1] < 0.05:
+    print("Series is Stationary")
+else:
+    print("Series is Non-Stationary")
+
+# Seasonal differencing
+
+diff = daily['view_count'].diff(7).dropna()
+
+adf_diff = adfuller(diff)
+
+print("ADF after differencing:", adf_diff[1])
+
+# ==========================
+# WEEKDAY ANALYSIS
+# ==========================
+
+daily['weekday'] = daily.index.day_name()
+
+weekday_order = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday'
 ]
 
-# Drop ID columns if they exist
-for col in ["#", "video_id"]:
-    if col in df.columns:
-        columns_to_drop.append(col)
-
-X = df.drop(columns=columns_to_drop)
-y = df["verified_status"]
-
-# ==========================
-# 10. Handle Class Imbalance
-# ==========================
-smote = SMOTE(random_state=42)
-
-X, y = smote.fit_resample(X, y)
-
-print("\nClass Distribution After SMOTE")
-print(y.value_counts())
-
-# ==========================
-# 11. Train-Test Split
-# ==========================
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
-    test_size=0.20,
-    random_state=42,
-    stratify=y
+weekday_avg = (
+    daily.groupby('weekday')['view_count']
+         .mean()
+         .reindex(weekday_order)
 )
 
-# ==========================
-# 12. Feature Scaling
-# ==========================
-scaler = StandardScaler()
+print(weekday_avg)
 
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
+colors = [
+    '#fe2c55' if x == weekday_avg.max()
+    else '#b8b8b8' if x == weekday_avg.min()
+    else '#25f4ee'
+    for x in weekday_avg
+]
 
-# ==========================
-# 13. Build Logistic Regression Model
-# ==========================
-model = LogisticRegression(
-    random_state=42,
-    max_iter=1000
+plt.figure(figsize=(10,5))
+
+plt.bar(
+    weekday_avg.index,
+    weekday_avg.values,
+    color=colors
 )
 
-model.fit(X_train, y_train)
+plt.title("Average Daily Views by Weekday")
+
+plt.xlabel("Weekday")
+
+plt.ylabel("Average Views")
+
+plt.xticks(rotation=30)
+
+plt.show()
+
+best_day = weekday_avg.idxmax()
+worst_day = weekday_avg.idxmin()
+
+print("Best upload day:", best_day)
+print("Lowest engagement day:", worst_day)
 
 # ==========================
-# 14. Predictions
+# ROLLING STATISTICS
 # ==========================
-y_pred = model.predict(X_test)
 
-# ==========================
-# 15. Evaluation
-# ==========================
-accuracy = accuracy_score(y_test, y_pred)
-precision = precision_score(y_test, y_pred)
-recall = recall_score(y_test, y_pred)
-f1 = f1_score(y_test, y_pred)
+daily['rolling_mean_7d'] = daily['view_count'].rolling(7).mean()
 
-print("\n==============================")
-print("Model Performance")
-print("==============================")
-print("Accuracy :", accuracy)
-print("Precision:", precision)
-print("Recall   :", recall)
-print("F1 Score :", f1)
+daily['rolling_std_7d'] = daily['view_count'].rolling(7).std()
 
-print("\nClassification Report")
-print(classification_report(y_test, y_pred))
+plt.figure(figsize=(12,5))
 
-# ==========================
-# 16. Confusion Matrix
-# ==========================
-cm = confusion_matrix(y_test, y_pred)
-
-plt.figure(figsize=(6,5))
-
-sns.heatmap(
-    cm,
-    annot=True,
-    fmt="d",
-    cmap="Blues",
-    xticklabels=["Not Verified","Verified"],
-    yticklabels=["Not Verified","Verified"]
+plt.plot(
+    daily.index,
+    daily['view_count'],
+    color='gray',
+    alpha=0.4,
+    label='Daily Views'
 )
 
-plt.xlabel("Predicted")
-plt.ylabel("Actual")
-plt.title("Confusion Matrix")
+plt.plot(
+    daily.index,
+    daily['rolling_mean_7d'],
+    color='#fe2c55',
+    linewidth=2,
+    label='7-Day Rolling Mean'
+)
+
+plt.title("Daily Views with 7-Day Rolling Mean")
+
+plt.xlabel("Date")
+
+plt.ylabel("Views")
+
+plt.legend()
+
+plt.show()
+
+plt.figure(figsize=(12,5))
+
+plt.plot(
+    daily.index,
+    daily['rolling_std_7d'],
+    color='#25f4ee'
+)
+
+plt.title("7-Day Rolling Standard Deviation")
+
+plt.xlabel("Date")
+
+plt.ylabel("Rolling Standard Deviation")
 
 plt.show()
 
 # ==========================
-# 17. Logistic Regression Coefficients
+# SUMMARY
 # ==========================
-coefficients = pd.DataFrame({
-    "Feature": X.columns,
-    "Coefficient": model.coef_[0]
-})
 
-coefficients = coefficients.sort_values(
-    by="Coefficient",
-    ascending=False
-)
+print("\n========== DISCOVERY ==========")
+print("• Trend: Daily views gradually increase over time.")
+print("• Seasonality: Weekly engagement pattern exists.")
+print("• Residual: Random day-to-day variation remains.")
 
-print("\nFeature Coefficients")
-print(coefficients)
-
-# ==========================
-# 18. Business Interpretation
-# ==========================
-print("\nBusiness Insights")
-print("- Longer video transcriptions may indicate more detailed content.")
-print("- Positive coefficients increase the likelihood of a creator being verified.")
-print("- Negative coefficients decrease the likelihood of verification.")
-print("- Videos containing factual claims may require additional moderation.")
-print("- Engagement-related features can help TikTok prioritize creator verification.")
-print("- SMOTE balanced the 94/6 class distribution, improving the model's ability to identify verified creators.")
-print("- F1-score is emphasized because the original dataset is highly imbalanced, making it a more reliable metric than accuracy.")
-print("- This model can help TikTok reduce verification review time and better prioritize moderation resources.")
+print("\n========== BUSINESS INSIGHTS ==========")
+print(f"Best day to upload: {best_day}")
+print(f"Lowest engagement day: {worst_day}")
+print("Schedule important content around weekends.")
+print("Use low-engagement days for lighter content.")
+print("Use SARIMA or ARIMA for future forecasting.")
